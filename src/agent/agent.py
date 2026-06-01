@@ -1,4 +1,3 @@
-import os
 import re
 from typing import List, Dict, Any, Optional
 from src.core.llm_provider import LLMProvider
@@ -23,7 +22,22 @@ class ReActAgent:
         1.  Available tools and their descriptions.
         2.  Format instructions: Thought, Action, Observation.
         """
-        tool_descriptions = "\n".join([f"- {t['name']}: {t['description']}" for t in self.tools])
+        import os
+
+        # Attempt to load the detailed system prompt from file. Fall back to a simple
+        # generated prompt that lists available tools if the file is missing.
+        prompt_path = os.path.join(os.path.dirname(__file__), "system_prompt.txt")
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                base = f.read()
+        except Exception:
+            base = None
+
+        tool_descriptions = "\n".join([f"- {t['name']}: {t.get('description','')}" for t in self.tools])
+
+        if base:
+            return f"{base}\n\nAvailable tools:\n{tool_descriptions}\n"
+
         return f"""
         You are an intelligent assistant. You have access to the following tools:
         {tool_descriptions}
