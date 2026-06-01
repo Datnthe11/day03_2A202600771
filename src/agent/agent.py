@@ -38,37 +38,75 @@ class ReActAgent:
 
     def run(self, user_input: str) -> str:
         """
-        TODO: Implement the ReAct loop logic.
-        1. Generate Thought + Action.
-        2. Parse Action and execute Tool.
-        3. Append Observation to prompt and repeat until Final Answer.
+        ReAct loop: Thought -> Action -> Observation, repeated until the LLM
+        emits a Final Answer or we hit max_steps.
+
+        1. Ask the LLM for the next Thought + Action.
+        2. Parse the Action line (see CONTRACT.md §2) and dispatch the tool.
+        3. Append the Observation to the transcript and loop.
         """
         logger.log_event("AGENT_START", {"input": user_input, "model": self.llm.model_name})
-        
-        current_prompt = user_input
+
+        system_prompt = self.get_system_prompt()
+        # The transcript is the accumulating scratchpad we feed back each step.
+        transcript = f"Question: {user_input}\n"
         steps = 0
+        final_answer = None
 
         while steps < self.max_steps:
-            # TODO: Generate LLM response
-            # result = self.llm.generate(current_prompt, system_prompt=self.get_system_prompt())
-            
-            # TODO: Parse Thought/Action from result
-            
-            # TODO: If Action found -> Call tool -> Append Observation
-            
-            # TODO: If Final Answer found -> Break loop
-            
             steps += 1
-            
-        logger.log_event("AGENT_END", {"steps": steps})
-        return "Not implemented. Fill in the TODOs!"
+
+            # 1. Generate the next chunk of reasoning.
+            result = self.llm.generate(transcript, system_prompt=system_prompt)
+            text = result["content"] if isinstance(result, dict) else str(result)
+
+            # The model often hallucinates its own "Observation:" — cut it off so we
+            # only keep its Thought/Action and supply the REAL observation ourselves.
+            text = text.split("Observation:")[0].strip()
+
+            logger.log_event("AGENT_STEP", {"step": steps, "llm_output": text})
+
+            # 2. Stop condition A: the model produced a Final Answer.
+            final_match = re.search(r"Final Answer:\s*(.*)", text, re.DOTALL)
+            if final_match:
+                final_answer = final_match.group(1).strip()
+                transcript += text + "\n"
+                break
+
+            # 3. Parse the Action line. (Loop passes args VERBATIM — no json parsing here.)
+            action_match = re.search(r"Action:\s*(\w+)\((.*)\)", text, re.DOTALL)
+            if not action_match:
+                # No Action and no Final Answer — nudge the model back on format.
+                observation = "error: could not parse Action line. Use 'Action: tool_name(<args>)' or 'Final Answer: ...'."
+                transcript += text + f"\nObservation: {observation}\n"
+                continue
+
+            tool_name = action_match.group(1).strip()
+            args = action_match.group(2).strip()
+
+            # 4. Dispatch the tool and append the real Observation.
+            observation = self._execute_tool(tool_name, args)
+            logger.log_event("TOOL_CALL", {"tool": tool_name, "args": args, "observation": observation})
+
+            transcript += text + f"\nObservation: {observation}\n"
+
+        # Stop condition B: we exhausted max_steps without a Final Answer.
+        if final_answer is None:
+            final_answer = "I could not reach a final answer within the step budget."
+
+        logger.log_event("AGENT_END", {"steps": steps, "final_answer": final_answer})
+        return final_answer
 
     def _execute_tool(self, tool_name: str, args: str) -> str:
         """
-        Helper method to execute tools by name.
+        Dispatch to the matching tool's `func` (see CONTRACT.md §5).
+        Tools own their own arg parsing and never raise; we defensively wrap
+        anyway so a misbehaving tool can't crash the loop.
         """
         for tool in self.tools:
-            if tool['name'] == tool_name:
-                # TODO: Implement dynamic function calling or simple if/else
-                return f"Result of {tool_name}"
-        return f"Tool {tool_name} not found."
+            if tool["name"] == tool_name:
+                try:
+                    return tool["func"](args)
+                except Exception as e:  # contract says func should never raise, but be safe
+                    return f"error: tool '{tool_name}' crashed: {e}"
+        return f"error: tool '{tool_name}' not found"
