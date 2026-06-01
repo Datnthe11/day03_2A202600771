@@ -62,8 +62,11 @@ class ReActAgent:
         logger.log_event("AGENT_START", {"input": user_input, "model": self.llm.model_name})
 
         system_prompt = self.get_system_prompt()
+        # Short-term memory: replay prior turns so the agent remembers the
+        # conversation instead of treating each question in isolation.
+        transcript = self._format_memory()
         # The transcript is the accumulating scratchpad we feed back each step.
-        transcript = f"Question: {user_input}\n"
+        transcript += f"Question: {user_input}\n"
         steps = 0
         final_answer = None
 
@@ -108,8 +111,30 @@ class ReActAgent:
         if final_answer is None:
             final_answer = "I could not reach a final answer within the step budget."
 
+        # Record this turn into short-term memory for the next call.
+        self.history.append({"user": user_input, "assistant": final_answer})
+
         logger.log_event("AGENT_END", {"steps": steps, "final_answer": final_answer})
         return final_answer
+
+    def _format_memory(self, max_turns: int = 5) -> str:
+        """
+        Render the last few conversation turns as a preamble for the prompt.
+        Keeping only the most recent `max_turns` bounds the prompt size — enough
+        memory for an MVP demo without letting the context grow forever.
+        """
+        if not self.history:
+            return ""
+        recent = self.history[-max_turns:]
+        lines = ["Previous conversation:"]
+        for turn in recent:
+            lines.append(f"User: {turn['user']}")
+            lines.append(f"Assistant: {turn['assistant']}")
+        return "\n".join(lines) + "\n\n"
+
+    def reset_memory(self) -> None:
+        """Clear short-term memory (start a fresh conversation)."""
+        self.history = []
 
     def _execute_tool(self, tool_name: str, args: str) -> str:
         """
