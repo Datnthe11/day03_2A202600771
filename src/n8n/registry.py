@@ -27,19 +27,51 @@ def build_webhook_params(params: Dict[str, Any]) -> Dict[str, Any]:
 def build_schedule_params(params: Dict[str, Any]) -> Dict[str, Any]:
     """Schedule/cron trigger. Supports both interval and cron modes."""
     if "cron" in params:
+        cron = params["cron"]
+        if isinstance(cron, str):
+            expression = cron
+        elif isinstance(cron, dict):
+            # Convert cron parts into a single cron expression string.
+            expression = " ".join(
+                str(cron.get(part, "*"))
+                for part in ["minute", "hour", "dayOfMonth", "month", "dayOfWeek"]
+            )
+        else:
+            expression = str(cron)
+
         return {
             "rule": {
-                "mode": "cron",
-                "cronExpression": params["cron"]
+                "interval": [
+                    {
+                        "field": "cronExpression",
+                        "expression": expression,
+                    }
+                ]
             }
         }
-    # Interval mode: interval + unit (seconds, minutes, hours, days, weeks, months)
+
     interval = params.get("interval", 1)
     unit = params.get("unit", "hours")
+    rule_item: Dict[str, Any] = {
+        "field": unit,
+        f"{unit}Interval": interval,
+    }
+
+    if unit in ["hours", "days", "weeks", "months"] and params.get("minute") is not None:
+        rule_item["triggerAtMinute"] = params["minute"]
+
+    if unit in ["days", "weeks", "months"] and params.get("hour") is not None:
+        rule_item["triggerAtHour"] = params["hour"]
+
+    if unit == "weeks" and params.get("dayOfWeek") is not None:
+        rule_item["triggerAtDay"] = params["dayOfWeek"]
+
+    if unit == "months" and params.get("dayOfMonth") is not None:
+        rule_item["triggerAtDayOfMonth"] = params["dayOfMonth"]
+
     return {
         "rule": {
-            "mode": "interval",
-            "interval": [{"field": "interval", "value": interval}, {"field": "unit", "value": unit}]
+            "interval": [rule_item]
         }
     }
 
@@ -83,14 +115,52 @@ def build_if_params(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_email_params(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Email Send node. Requires 'to', 'subject', 'body'."""
-    return {
+    """Email Send node. Requires 'from_email', 'to', and 'subject'."""
+    config: Dict[str, Any] = {
         "fromEmail": params.get("from_email", ""),
         "toEmail": params.get("to", ""),
-        "ccEmail": params.get("cc", ""),
         "subject": params.get("subject", ""),
-        "textHtml": params.get("body", ""),
     }
+
+    if params.get("body") is not None:
+        config["emailFormat"] = "html"
+        config["html"] = params.get("body", "")
+
+    if params.get("cc"):
+        config["options"] = {"ccEmail": params["cc"]}
+
+    return config
+
+
+def build_gmail_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Gmail node parameters (n8n gmail). Uses authenticated account; requires 'to' and 'subject'.
+
+    This produces a minimal parameter set for the Gmail send node. n8n's Gmail node
+    authenticates with OAuth and sends from the connected account, so 'from' is optional.
+    """
+    cfg: Dict[str, Any] = {
+        "operation": "send",
+        "resource": "message",
+        "to": params.get("to", ""),
+        "subject": params.get("subject", ""),
+    }
+
+    # Body: prefer html when provided
+    if params.get("body") is not None:
+        # If the caller explicitly requests html, use 'html'; otherwise set 'text'
+        if params.get("html", False) or ("<" in str(params.get("body", "")) and ">" in str(params.get("body", ""))):
+            cfg["html"] = params.get("body", "")
+        else:
+            cfg["text"] = params.get("body", "")
+
+    # Optional cc and attachments
+    if params.get("cc"):
+        cfg["cc"] = params["cc"]
+
+    if params.get("attachments"):
+        cfg["attachments"] = params["attachments"]
+
+    return cfg
 
 
 # Node Registry: maps logical kind -> n8n native type info
@@ -141,8 +211,15 @@ NODE_REGISTRY: Dict[str, Dict[str, Any]] = {
         "type": "n8n-nodes-base.emailSend",
         "version": 2.1,
         "build": build_email_params,
+        "required_params": ["from_email", "to", "subject"],
+        "optional_params": ["cc", "body"],
+    },
+    "gmail": {
+        "type": "n8n-nodes-base.gmail",
+        "version": 1,
+        "build": build_gmail_params,
         "required_params": ["to", "subject"],
-        "optional_params": ["from_email", "cc", "body"],
+        "optional_params": ["cc", "body", "attachments"],
     },
 }
 
@@ -188,7 +265,8 @@ def validate_node_params(kind: str, params: Dict[str, Any]) -> List[str]:
     errors = []
     
     for req_param in required:
-        if req_param not in params or params[req_param] is None:
+        # Treat missing or empty-string values as missing
+        if req_param not in params or params[req_param] is None or (isinstance(params[req_param], str) and params[req_param].strip() == ""):
             errors.append(f"Missing required param '{req_param}' for {kind}")
     
     return errors

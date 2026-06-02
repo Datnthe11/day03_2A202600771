@@ -18,6 +18,145 @@ Tool Catalog (Phase 1 names):
 """
 
 import json
+import re
+
+
+def _clean_json_input(s: str) -> str:
+    """Stateful sanitize: remove comments (outside strings) and escape control chars inside strings."""
+    out_chars = []
+    i = 0
+    length = len(s)
+    in_str = False
+    escape = False
+
+    while i < length:
+        ch = s[i]
+
+        if in_str:
+            # inside a quoted string: handle escapes and raw control chars
+            if escape:
+                out_chars.append(ch)
+                escape = False
+                i += 1
+                continue
+
+            if ch == '\\':
+                out_chars.append(ch)
+                escape = True
+                i += 1
+                continue
+
+            if ch == '"':
+                # Heuristic: if this quote is part of an embedded template like $json["..."],
+                # escape it instead of closing the outer string.
+                tail = ''.join(out_chars[-120:]) if len(out_chars) > 0 else ''
+                if ('$json[' in tail) or ('{{ $json[' in tail) or ('{$json[' in tail):
+                    out_chars.append('\\"')
+                    i += 1
+                    continue
+
+                out_chars.append(ch)
+                in_str = False
+                i += 1
+                continue
+
+            # replace raw control characters
+            if ch == '\n':
+                out_chars.append('\\n')
+            elif ch == '\r':
+                out_chars.append('\\r')
+            elif ch == '\t':
+                out_chars.append('\\t')
+            else:
+                out_chars.append(ch)
+
+            i += 1
+            continue
+
+        # not in string
+        if ch == '"':
+            out_chars.append(ch)
+            in_str = True
+            i += 1
+            continue
+
+        # detect // comment
+        if ch == '/' and i + 1 < length and s[i+1] == '/':
+            # skip until end of line
+            i += 2
+            while i < length and s[i] != '\n':
+                i += 1
+            continue
+
+        # detect /* */ comment
+        if ch == '/' and i + 1 < length and s[i+1] == '*':
+            i += 2
+            while i + 1 < length and not (s[i] == '*' and s[i+1] == '/'):
+                i += 1
+            i += 2
+            continue
+
+        out_chars.append(ch)
+        i += 1
+
+    cleaned = ''.join(out_chars)
+    try:
+        cleaned = _remove_trailing_commas(cleaned)
+    except Exception:
+        pass
+    return cleaned
+    
+    
+
+def _remove_trailing_commas(s: str) -> str:
+    """Remove trailing commas before '}' or ']' outside of string literals."""
+    out = []
+    i = 0
+    in_str = False
+    escape = False
+    length = len(s)
+    while i < length:
+        ch = s[i]
+        if in_str:
+            if escape:
+                out.append(ch)
+                escape = False
+            elif ch == '\\':
+                out.append(ch)
+                escape = True
+            elif ch == '"':
+                out.append(ch)
+                in_str = False
+            else:
+                out.append(ch)
+            i += 1
+            continue
+
+        # not in string
+        if ch == '"':
+            out.append(ch)
+            in_str = True
+            i += 1
+            continue
+
+        if ch == ',':
+            # lookahead for next non-space
+            j = i + 1
+            while j < length and s[j].isspace():
+                j += 1
+            if j < length and s[j] in ('}', ']'):
+                # skip this comma
+                i += 1
+                continue
+            else:
+                out.append(ch)
+                i += 1
+                continue
+
+        out.append(ch)
+        i += 1
+
+    return ''.join(out)
 from typing import Tuple, List, Dict, Any, Callable, Optional
 
 from src.n8n.spec import WorkflowSpec
@@ -96,11 +235,15 @@ def tool_validate_spec(args: str) -> str:
         if not args.strip():
             return "error: validate_spec requires a WorkflowSpec JSON argument"
         
-        # Parse WorkflowSpec
+        # Parse WorkflowSpec (tolerant): try strict JSON then sanitize
         try:
             spec_dict = json.loads(args)
-        except json.JSONDecodeError as e:
-            return f"error: invalid JSON in validate_spec: {e}"
+        except json.JSONDecodeError:
+            try:
+                cleaned = _clean_json_input(args)
+                spec_dict = json.loads(cleaned)
+            except Exception as e:
+                return f"error: invalid JSON in validate_spec: {e}"
         
         try:
             spec = WorkflowSpec(**spec_dict)
@@ -133,11 +276,15 @@ def tool_compile_spec(args: str) -> str:
         if not args.strip():
             return "error: compile_spec requires a WorkflowSpec JSON argument"
         
-        # Parse spec
+        # Parse spec (tolerant): try strict JSON then sanitize
         try:
             spec_dict = json.loads(args)
-        except json.JSONDecodeError as e:
-            return f"error: invalid JSON in compile_spec: {e}"
+        except json.JSONDecodeError:
+            try:
+                cleaned = _clean_json_input(args)
+                spec_dict = json.loads(cleaned)
+            except Exception as e:
+                return f"error: invalid JSON in compile_spec: {e}"
         
         try:
             spec = WorkflowSpec(**spec_dict)
@@ -151,7 +298,7 @@ def tool_compile_spec(args: str) -> str:
             return f"error: compilation failed: {e}"
         
         # Return compiled JSON
-        compiled_str = json.dumps(workflow_json, indent=0)  # compact
+        compiled_str = json.dumps(workflow_json, indent=2)
         return f"ok | {compiled_str}"
     
     except Exception as e:
@@ -173,11 +320,15 @@ def tool_create_workflow(args: str, client: N8nClient) -> str:
         if not args.strip():
             return "error: create_workflow requires a WorkflowSpec JSON argument"
         
-        # Parse spec
+        # Parse spec (tolerant): try strict JSON then sanitize
         try:
             spec_dict = json.loads(args)
-        except json.JSONDecodeError as e:
-            return f"error: invalid JSON in create_workflow: {e}"
+        except json.JSONDecodeError:
+            try:
+                cleaned = _clean_json_input(args)
+                spec_dict = json.loads(cleaned)
+            except Exception as e:
+                return f"error: invalid JSON in create_workflow: {e}"
         
         try:
             spec = WorkflowSpec(**spec_dict)

@@ -62,8 +62,13 @@ class ReActAgent:
         logger.log_event("AGENT_START", {"input": user_input, "model": self.llm.model_name})
 
         system_prompt = self.get_system_prompt()
-        # The transcript is the accumulating scratchpad we feed back each step.
-        transcript = f"Question: {user_input}\n"
+        self.history.append({"role": "User", "content": user_input})
+
+        # Preserve all prior turns so follow-up questions retain dialogue context.
+        transcript = ""
+        for entry in self.history:
+            transcript += f"{entry['role']}: {entry['content']}\n"
+
         steps = 0
         final_answer = None
 
@@ -108,6 +113,7 @@ class ReActAgent:
         if final_answer is None:
             final_answer = "I could not reach a final answer within the step budget."
 
+        self.history.append({"role": "Assistant", "content": final_answer})
         logger.log_event("AGENT_END", {"steps": steps, "final_answer": final_answer})
         return final_answer
 

@@ -14,7 +14,7 @@ Environment (.env):
     OPENAI_API_KEY   required                        -> the LLM
     N8N_API_KEY      required to deploy workflows     -> n8n REST API auth
     N8N_BASE_URL     optional (default http://localhost:5678/api/v1)
-    DEFAULT_MODEL    optional (default gpt-4o)
+    DEFAULT_MODEL    optional (default gpt-4o-mini)
 """
 
 import os
@@ -51,9 +51,9 @@ def build_agent() -> ReActAgent:
         print("OPENAI_API_KEY is missing or still the placeholder in .env.")
         sys.exit(1)
 
-    model_name = os.getenv("DEFAULT_MODEL", "gpt-4o")
+    model_name = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
     if model_name.startswith("gemini"):  # .env may carry a non-OpenAI model name
-        model_name = "gpt-4o"
+        model_name = "gpt-4o-mini"
 
     if not os.getenv("N8N_API_KEY"):
         print("⚠️  N8N_API_KEY not set — offline tools work, but create/activate/get/")
@@ -65,7 +65,7 @@ def build_agent() -> ReActAgent:
     client = N8nClient(base_url=base_url, api_key=os.getenv("N8N_API_KEY") or "offline-no-key")
     tools, execute_tool = create_n8n_tools(client)
 
-    agent = ReActAgent(llm, tools, max_steps=10)
+    agent = ReActAgent(llm, tools, max_steps=100)
     agent._execute_tool = execute_tool  # route dispatch to the n8n tools
     return agent
 
