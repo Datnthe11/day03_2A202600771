@@ -109,5 +109,3 @@ already targets:
 
 ---
 
-> [!NOTE]
-> Submit by renaming to `GROUP_REPORT_[TEAM_NAME].md` and placing it in this folder.

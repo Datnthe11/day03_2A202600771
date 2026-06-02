@@ -85,5 +85,3 @@ to any `LLMProvider` and any tool that honors the team's `CONTRACT.md` interface
 
 ---
 
-> [!NOTE]
-> Submit this report by renaming it to `REPORT_[YOUR_NAME].md` and placing it in this folder.
