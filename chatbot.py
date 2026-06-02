@@ -73,7 +73,7 @@ def build_agent() -> ReActAgent:
 def run_interactive(agent: ReActAgent):
     print("=== n8n Workflow Builder Agent ===")
     print("Available tools:", ", ".join(t["name"] for t in agent.tools))
-    print("Describe the workflow you want, or type 'quit' / 'exit' to stop.\n")
+    print("Describe the workflow you want. Commands: 'clear' (forget memory), 'quit' to stop.\n")
     while True:
         try:
             user_input = input("You: ").strip()
@@ -83,6 +83,10 @@ def run_interactive(agent: ReActAgent):
         if user_input.lower() in {"quit", "exit", "q"}:
             print("Bye!")
             break
+        if user_input.lower() in {"clear", "reset"}:
+            agent.reset_memory()
+            print("(short-term memory cleared)\n")
+            continue
         if not user_input:
             continue
         answer = agent.run(user_input)

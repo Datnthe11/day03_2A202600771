@@ -14,6 +14,11 @@ class ReActAgent:
         self.tools = tools
         self.max_steps = max_steps
         self.history = []
+        # Full conversational memory: the ENTIRE running transcript across all
+        # turns — every Question / Thought / Action / Observation / Final Answer.
+        # It persists between run() calls and is fed back to the model in full,
+        # so the agent never forgets earlier steps, even mid-clarification.
+        self.transcript = ""
 
     def get_system_prompt(self) -> str:
         """
@@ -75,8 +80,8 @@ class ReActAgent:
         while steps < self.max_steps:
             steps += 1
 
-            # 1. Generate the next chunk of reasoning.
-            result = self.llm.generate(transcript, system_prompt=system_prompt)
+            # 1. Generate the next chunk of reasoning from the FULL transcript.
+            result = self.llm.generate(self.transcript, system_prompt=system_prompt)
             text = result["content"] if isinstance(result, dict) else str(result)
 
             # The model often hallucinates its own "Observation:" — cut it off so we
@@ -85,11 +90,12 @@ class ReActAgent:
 
             logger.log_event("AGENT_STEP", {"step": steps, "llm_output": text})
 
-            # 2. Stop condition A: the model produced a Final Answer.
+            # 2. Stop condition A: the model produced a Final Answer (this also covers
+            #    the agent stopping to ask the user for more information).
             final_match = re.search(r"Final Answer:\s*(.*)", text, re.DOTALL)
             if final_match:
                 final_answer = final_match.group(1).strip()
-                transcript += text + "\n"
+                self.transcript += text + "\n"
                 break
 
             # 3. Parse the Action line. (Loop passes args VERBATIM — no json parsing here.)
@@ -97,7 +103,7 @@ class ReActAgent:
             if not action_match:
                 # No Action and no Final Answer — nudge the model back on format.
                 observation = "error: could not parse Action line. Use 'Action: tool_name(<args>)' or 'Final Answer: ...'."
-                transcript += text + f"\nObservation: {observation}\n"
+                self.transcript += text + f"\nObservation: {observation}\n"
                 continue
 
             tool_name = action_match.group(1).strip()
@@ -107,15 +113,24 @@ class ReActAgent:
             observation = self._execute_tool(tool_name, args)
             logger.log_event("TOOL_CALL", {"tool": tool_name, "args": args, "observation": observation})
 
-            transcript += text + f"\nObservation: {observation}\n"
+            self.transcript += text + f"\nObservation: {observation}\n"
 
         # Stop condition B: we exhausted max_steps without a Final Answer.
         if final_answer is None:
             final_answer = "I could not reach a final answer within the step budget."
+            self.transcript += f"Final Answer: {final_answer}\n"
+
+        # Keep a structured per-turn record too (handy for inspection/telemetry).
+        self.history.append({"user": user_input, "assistant": final_answer})
 
         self.history.append({"role": "Assistant", "content": final_answer})
         logger.log_event("AGENT_END", {"steps": steps, "final_answer": final_answer})
         return final_answer
+
+    def reset_memory(self) -> None:
+        """Clear all memory (start a fresh conversation)."""
+        self.history = []
+        self.transcript = ""
 
     def _execute_tool(self, tool_name: str, args: str) -> str:
         """
