@@ -1,7 +1,10 @@
 # Group Report: n8n Workflow-Builder Agent
 
 * **Team Name**: 086
-* **Team Members**: Nguyễn Thành Đạt, Member 2
+* **Team Members**: 
+[2A202600771 - Nguyễn Thành Đạt
+2A202600778 - Trần Bá Đạt
+2A202600917 - Nguyễn Thị Bảo Trân]
 * **Deployment Date**: 2026-06-01
 
 ---
